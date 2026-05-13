@@ -1,6 +1,6 @@
-# claude-code-testing
+# TIL Journal API
 
-A FastAPI sandbox for exploring Claude Code features.
+A small FastAPI service for logging "today I learned" entries and generating periodic digests. Entries are auto-tagged by an LLM client; ships with a deterministic offline fake so it runs without an API key.
 
 ## Requirements
 
@@ -19,16 +19,44 @@ uv sync
 uv run uvicorn app.main:app --reload
 ```
 
-The API will be available at http://127.0.0.1:8000.
-Interactive docs: http://127.0.0.1:8000/docs.
-
-## Endpoints
-
-- `GET /` — hello message
-- `GET /health` — health check
+Open http://127.0.0.1:8000/docs for the interactive Swagger UI.
 
 ## Tests
 
 ```bash
 uv run pytest
 ```
+
+## Endpoints
+
+### Entries
+
+- `POST /entries` — log a TIL. Auto-tags if `tags` is omitted.
+  ```bash
+  curl -X POST http://127.0.0.1:8000/entries \
+    -H 'content-type: application/json' \
+    -d '{"text": "FastAPI lifespan handlers replace startup/shutdown events"}'
+  ```
+- `GET /entries?tag=<tag>&since=<iso8601>` — list entries.
+- `GET /entries/{id}` — fetch one.
+- `DELETE /entries/{id}` — delete.
+- `GET /entries/tags/all` — counts per tag.
+
+### Digests
+
+- `POST /digests/generate` body `{"period": "week" | "month", "end_date"?: "YYYY-MM-DD"}` — generate a digest covering the period ending on `end_date` (default today).
+- `GET /digests` — list recent digests.
+- `GET /digests/{id}` — fetch one.
+
+## Configuration
+
+| Env var        | Default                     | Purpose                          |
+| -------------- | --------------------------- | -------------------------------- |
+| `TIL_DB_PATH`  | `<repo>/til.db`             | Path to the SQLite database.     |
+
+## Claude Code skills
+
+This repo ships with two skills (in `.claude/skills/`) that Claude Code can auto-discover:
+
+- **`add-feature`** — scaffolds a new SQLite-backed resource (model, router, schema, tests).
+- **`log-til`** — log a TIL directly from a Claude Code session; bypasses HTTP and writes to the local DB.
