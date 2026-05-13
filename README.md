@@ -19,7 +19,8 @@ uv sync
 uv run uvicorn app.main:app --reload
 ```
 
-Open http://127.0.0.1:8000/docs for the interactive Swagger UI.
+- Web UI: http://127.0.0.1:8000/
+- Interactive API docs: http://127.0.0.1:8000/docs
 
 ## Tests
 
@@ -42,11 +43,27 @@ uv run pytest
 - `DELETE /entries/{id}` — delete.
 - `GET /entries/tags/all` — counts per tag.
 
+### Bookmarks
+
+- `POST /bookmarks` — save a URL with optional `title`, `notes`, `tags`.
+- `GET /bookmarks?tag=<tag>` — list.
+- `GET /bookmarks/{id}` / `DELETE /bookmarks/{id}` — read / delete.
+
 ### Digests
 
 - `POST /digests/generate` body `{"period": "week" | "month", "end_date"?: "YYYY-MM-DD"}` — generate a digest covering the period ending on `end_date` (default today).
 - `GET /digests` — list recent digests.
 - `GET /digests/{id}` — fetch one.
+
+## CLI
+
+```bash
+uv run python -m app.cli stats                       # entry/digest counts
+uv run python -m app.cli digest --period week        # generate + print digest
+uv run python -m app.cli digest --period month       # 30-day digest
+```
+
+Pair with cron for automatic weekly digests.
 
 ## Configuration
 

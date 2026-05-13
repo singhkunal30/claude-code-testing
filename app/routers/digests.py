@@ -9,6 +9,7 @@ from app.db import db_session
 from app.llm import generate_digest
 from app.llm.base import DigestEntry, DigestInput
 from app.models.digest import Digest, DigestCreate
+from app.routers.entries import _tags_for_many
 
 router = APIRouter(prefix="/digests", tags=["digests"])
 
@@ -33,11 +34,12 @@ def generate(payload: DigestCreate) -> Digest:
             (start.isoformat(), end.isoformat()),
         ).fetchall()
 
+        tags_by_id = _tags_for_many(conn, [r["id"] for r in rows])
         entries = [
             DigestEntry(
                 id=r["id"],
                 text=r["text"],
-                tags=json.loads(r["tags_json"]),
+                tags=tags_by_id[r["id"]],
                 created_at=r["created_at"],
             )
             for r in rows

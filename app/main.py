@@ -4,7 +4,8 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 
 from app.db import init_db
-from app.routers import digests, entries
+from app.routers import bookmarks, digests, entries
+from app.ui import router as ui_router
 
 
 @asynccontextmanager
@@ -15,12 +16,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="til-journal", version="0.1.0", lifespan=lifespan)
 app.include_router(entries.router)
+app.include_router(bookmarks.router)
 app.include_router(digests.router)
-
-
-@app.get("/")
-def root() -> dict[str, str]:
-    return {"message": "TIL journal API"}
+app.include_router(ui_router.router)
 
 
 @app.get("/health")

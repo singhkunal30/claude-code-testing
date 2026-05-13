@@ -40,11 +40,45 @@ CREATE TABLE IF NOT EXISTS entries (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     text        TEXT    NOT NULL,
     source      TEXT,
-    tags_json   TEXT    NOT NULL DEFAULT '[]',
     created_at  TEXT    NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at);
+
+CREATE TABLE IF NOT EXISTS tags (
+    id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    name  TEXT    NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS entry_tags (
+    entry_id  INTEGER NOT NULL,
+    tag_id    INTEGER NOT NULL,
+    PRIMARY KEY (entry_id, tag_id),
+    FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE,
+    FOREIGN KEY (tag_id)   REFERENCES tags(id)    ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_entry_tags_tag ON entry_tags(tag_id);
+
+CREATE TABLE IF NOT EXISTS bookmarks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    url         TEXT    NOT NULL,
+    title       TEXT,
+    notes       TEXT,
+    created_at  TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_bookmarks_created_at ON bookmarks(created_at);
+
+CREATE TABLE IF NOT EXISTS bookmark_tags (
+    bookmark_id  INTEGER NOT NULL,
+    tag_id       INTEGER NOT NULL,
+    PRIMARY KEY (bookmark_id, tag_id),
+    FOREIGN KEY (bookmark_id) REFERENCES bookmarks(id) ON DELETE CASCADE,
+    FOREIGN KEY (tag_id)      REFERENCES tags(id)      ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_bookmark_tags_tag ON bookmark_tags(tag_id);
 
 CREATE TABLE IF NOT EXISTS digests (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -39,8 +39,16 @@ If `fields` is unclear, ask once before scaffolding.
 - Migrations are append-only `CREATE TABLE IF NOT EXISTS` in `app/db.py`. Do not write a migration framework — this project relies on the idempotent SCHEMA.
 - Routers must use `db_session()` (the context manager) — never open raw connections.
 - Time fields are stored as ISO-8601 UTC strings; convert with `datetime.now(timezone.utc).isoformat()`.
-- Lists of strings (tags etc.) are stored as JSON-encoded TEXT columns named `<field>_json`. Decode in `from_row`.
 - 404s use `HTTPException(status_code=404, detail="<ModelName> not found")`.
+
+### Tags / list-of-strings columns
+
+The project uses a relational pattern, not JSON columns:
+
+- A shared `tags` table holds `(id, name UNIQUE)`.
+- A per-resource link table — `<resource>_tags(<resource_id>, tag_id)` — with `FOREIGN KEY ... ON DELETE CASCADE` links resources to tags.
+- Helper functions in `app/routers/entries.py` (`_set_tags`, `_tags_for`, `_tags_for_many`) show the canonical read/write pattern. Reuse the shared `tags` table; add a new link table per resource that needs tagging.
+- Snapshot fields (e.g. `entry_ids` on `digests`) remain JSON-encoded TEXT (`<field>_json`) because they record a point-in-time list, not a live relation.
 
 ## Do not
 

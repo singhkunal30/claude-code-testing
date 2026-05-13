@@ -6,25 +6,28 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
-class EntryCreate(BaseModel):
-    text: str = Field(min_length=1)
-    source: str | None = None
+class BookmarkCreate(BaseModel):
+    url: str = Field(min_length=1)
+    title: str | None = None
+    notes: str | None = None
     tags: list[str] | None = None
 
 
-class Entry(BaseModel):
+class Bookmark(BaseModel):
     id: int
-    text: str
-    source: str | None
+    url: str
+    title: str | None
+    notes: str | None
     tags: list[str]
     created_at: datetime
 
     @classmethod
-    def from_row(cls, row: sqlite3.Row, tags: list[str]) -> "Entry":
+    def from_row(cls, row: sqlite3.Row, tags: list[str]) -> "Bookmark":
         return cls(
             id=row["id"],
-            text=row["text"],
-            source=row["source"],
+            url=row["url"],
+            title=row["title"],
+            notes=row["notes"],
             tags=tags,
             created_at=datetime.fromisoformat(row["created_at"]),
         )

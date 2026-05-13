@@ -21,21 +21,29 @@ Guidance for Claude Code when working in this repository.
 app/
   __init__.py
   main.py              # FastAPI app, lifespan calls init_db()
+  cli.py               # `python -m app.cli` for scheduled digest / stats
   db.py                # sqlite3 connection helper, SCHEMA, init_db()
   models/              # Pydantic models (one module per resource)
     entry.py
+    bookmark.py
     digest.py
   routers/             # FastAPI routers (one module per resource)
     entries.py
+    bookmarks.py
     digests.py
   llm/                 # LLM interface and clients
     base.py            # LLMClient protocol + DigestInput / DigestEntry
     fake.py            # FakeLLMClient (default, offline, deterministic)
     __init__.py        # set_client / get_client / auto_tag / generate_digest
+  ui/                  # Server-rendered HTML UI (no JS framework)
+    router.py          # GET / + /ui/* form-handling routes
+    templates.py       # html.escape-based render helpers
 tests/
   conftest.py          # `client` fixture with isolated per-test sqlite DB
   test_entries.py
+  test_bookmarks.py
   test_digests.py
+  test_ui.py
 .claude/
   skills/
     add-feature/       # scaffold a new SQLite-backed resource
@@ -52,16 +60,20 @@ tests/
 | Add a dep       | `uv add <package>`                               |
 | Log a TIL       | invoke the `log-til` skill                       |
 | Scaffold feature| invoke the `add-feature` skill                   |
+| Weekly digest   | `uv run python -m app.cli digest --period week`  |
+| DB stats        | `uv run python -m app.cli stats`                 |
 
 ## Conventions
 
 - **No ORM.** Use stdlib `sqlite3` directly. Always go through `app.db.db_session()` (a context manager that commits on success, rolls back on exception).
 - **Schema lives in `app/db.py`** as a single `SCHEMA` string of `CREATE TABLE IF NOT EXISTS` statements. Append new tables there — do not add a migrations framework.
 - **Time** is stored as ISO-8601 UTC strings (`datetime.now(timezone.utc).isoformat()`).
-- **List columns** (tags, entry_ids) are stored as JSON-encoded TEXT columns named `<field>_json`; decode in the model's `from_row` classmethod.
+- **Tags** use a relational pattern: a shared `tags(id, name UNIQUE)` table plus a per-resource link table (e.g. `entry_tags`, `bookmark_tags`) with `ON DELETE CASCADE`. See `_set_tags`, `_tags_for`, `_tags_for_many` in `app/routers/entries.py`. POST handlers should re-query tags via `_tags_for` after `_set_tags` so the response matches GET ordering.
+- **Snapshot lists** (e.g. `entry_ids` on `digests`) remain JSON-encoded TEXT columns named `<field>_json` because they record a point-in-time list, not a live relation.
 - **Type hints** use the modern style: `list[X]`, `dict[str, int]`, `X | None`.
 - **LLM access** goes through `app.llm.auto_tag` and `app.llm.generate_digest`. To swap in a real client, call `app.llm.set_client(...)` once at startup.
 - **404s** raise `HTTPException(status_code=404, detail="<ModelName> not found")`.
+- **UI routes** live in `app/ui/router.py`, are HTML-only, and never appear in the OpenAPI schema (`include_in_schema=False`). Forms are parsed manually with `urllib.parse.parse_qs` — do not introduce `python-multipart`.
 - **Tests** use the `client` fixture from `tests/conftest.py` which sets `TIL_DB_PATH` to a tmp file. Never write to the dev DB from a test.
 
 ## Branching
@@ -71,6 +83,7 @@ Feature work happens on `claude/...` branches. The default working branch is `cl
 ## Future work / not done yet
 
 - Real `AnthropicLLMClient` implementing `LLMClient`.
-- Many-to-many tags table (currently JSON column).
-- Auth.
+- Auth on UI + API.
 - Webhook ingest from external sources.
+- Tag editing (rename, merge) UI.
+- HTMX/JS-free dynamic updates (currently every form post is a full page reload).
