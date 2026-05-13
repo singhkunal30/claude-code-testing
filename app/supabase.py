@@ -159,6 +159,8 @@ class _InMemory:
         self._composite_pk: dict[str, tuple[str, ...]] = {
             "entry_tags": ("entry_id", "tag_id"),
             "bookmark_tags": ("bookmark_id", "tag_id"),
+            "entry_reactions": ("entry_id", "emoji"),
+            "collection_entries": ("collection_id", "entry_id"),
         }
 
     def _t(self, table: str) -> list[Row]:
@@ -168,7 +170,15 @@ class _InMemory:
         rows = self._t(table)
         if table not in self._composite_pk and "id" not in row:
             row = {"id": next(self._seq), **row}
-        if "created_at" not in row and table in ("entries", "bookmarks", "digests"):
+        if "created_at" not in row and table in (
+            "entries",
+            "bookmarks",
+            "digests",
+            "comments",
+            "collections",
+            "highlights",
+            "prompts",
+        ):
             from datetime import datetime, timezone
 
             row = {**row, "created_at": datetime.now(timezone.utc).isoformat()}
@@ -231,13 +241,45 @@ class _InMemory:
         # Emulate FK ON DELETE CASCADE for our schema.
         if table == "entries":
             removed_ids = {r["id"] for r in removed}
-            self._tables["entry_tags"] = [
-                r for r in self._t("entry_tags") if r["entry_id"] not in removed_ids
-            ]
+            for child in ("entry_tags", "entry_reactions", "collection_entries", "highlights"):
+                self._tables[child] = [
+                    r for r in self._t(child) if r["entry_id"] not in removed_ids
+                ]
+            # comments: also cascade replies (children) via parent_comment_id
+            removed_comment_ids: set[int] = set()
+
+            def _drop_comments_for(eids: set[int]) -> None:
+                kept_c: list[Row] = []
+                for c in self._t("comments"):
+                    if c["entry_id"] in eids:
+                        removed_comment_ids.add(c["id"])
+                    else:
+                        kept_c.append(c)
+                self._tables["comments"] = kept_c
+
+            _drop_comments_for(removed_ids)
+        if table == "comments":
+            # Cascade replies whose parent was removed.
+            removed_ids = {r["id"] for r in removed}
+            while removed_ids:
+                next_round: set[int] = set()
+                kept_c: list[Row] = []
+                for c in self._t("comments"):
+                    if c.get("parent_comment_id") in removed_ids:
+                        next_round.add(c["id"])
+                    else:
+                        kept_c.append(c)
+                self._tables["comments"] = kept_c
+                removed_ids = next_round
         if table == "bookmarks":
             removed_ids = {r["id"] for r in removed}
             self._tables["bookmark_tags"] = [
                 r for r in self._t("bookmark_tags") if r["bookmark_id"] not in removed_ids
+            ]
+        if table == "collections":
+            removed_ids = {r["id"] for r in removed}
+            self._tables["collection_entries"] = [
+                r for r in self._t("collection_entries") if r["collection_id"] not in removed_ids
             ]
         return removed
 
