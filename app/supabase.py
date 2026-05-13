@@ -21,7 +21,7 @@ from app.config import settings
 
 
 Row = dict[str, Any]
-Filters = dict[str, tuple[str, Any]]  # column -> (op, value), op in {eq, in, gte, lte, lt, gt}
+Filters = dict[str, tuple[str, Any]]  # column -> (op, value), op in {eq, in, gte, lte, lt, gt, ilike}
 
 
 class SupabaseClient(Protocol):
@@ -148,6 +148,13 @@ def _passes_filter(row: Row, filters: Filters) -> bool:
             return False
         if op == "lt" and not (cur is not None and cur < value):
             return False
+        if op == "ilike":
+            if cur is None:
+                return False
+            # PostgREST uses '*' as the wildcard; strip them for substring match.
+            needle = str(value).replace("*", "").lower()
+            if needle not in str(cur).lower():
+                return False
     return True
 
 

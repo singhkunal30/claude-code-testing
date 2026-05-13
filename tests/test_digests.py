@@ -30,3 +30,15 @@ def test_unsupported_period_returns_400(client) -> None:
     r = client.post("/digests/generate", json={"period": "year"})
     # Pydantic Literal validation kicks in before our handler.
     assert r.status_code == 422
+
+
+def test_digest_includes_themes_and_followups(client) -> None:
+    client.post("/entries", json={"text": "python decorators", "tags": ["python"]})
+    client.post("/entries", json={"text": "python asyncio", "tags": ["python"]})
+    client.post("/entries", json={"text": "fastapi background tasks", "tags": ["fastapi"]})
+
+    content = client.post("/digests/generate", json={"period": "week"}).json()["content"]
+    assert "## Themes" in content
+    assert "## Recurring tags" in content
+    assert "python" in content
+    assert "## Follow-up questions" in content

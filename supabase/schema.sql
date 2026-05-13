@@ -9,8 +9,12 @@ CREATE TABLE IF NOT EXISTS public.entries (
     id          BIGSERIAL PRIMARY KEY,
     text        TEXT NOT NULL,
     source      TEXT,
+    embedding   JSONB,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Adopt the embedding column on pre-existing schemas.
+ALTER TABLE public.entries ADD COLUMN IF NOT EXISTS embedding JSONB;
 
 CREATE INDEX IF NOT EXISTS idx_entries_created_at ON public.entries(created_at DESC);
 

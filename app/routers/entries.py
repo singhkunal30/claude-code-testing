@@ -4,7 +4,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.llm import auto_tag
+from app.llm import auto_tag, embed
 from app.models.entry import Entry, EntryCreate
 from app.supabase import client
 
@@ -86,7 +86,11 @@ def create_entry(payload: EntryCreate) -> Entry:
 
     [row] = sb.insert(
         "entries",
-        {"text": payload.text, "source": payload.source},
+        {
+            "text": payload.text,
+            "source": payload.source,
+            "embedding": embed(payload.text),
+        },
     )
     tags = _link_tags(row["id"], tag_names)
     return _to_entry(row, tags)
@@ -116,6 +120,73 @@ def list_entries(
     rows = sb.select("entries", filters=filters, order="created_at.desc", limit=limit)
     tags_by_id = _tags_for_many([r["id"] for r in rows])
     return [_to_entry(r, tags_by_id[r["id"]]) for r in rows]
+
+
+@router.get("/search", response_model=list[Entry])
+def search_entries(
+    q: str = Query(min_length=1),
+    limit: int = Query(default=50, le=500),
+) -> list[Entry]:
+    sb = client()
+    needle = q.strip()
+    if not needle:
+        return []
+    text_rows = sb.select(
+        "entries",
+        filters={"text": ("ilike", f"*{needle}*")},
+        order="created_at.desc",
+        limit=limit,
+    )
+    source_rows = sb.select(
+        "entries",
+        filters={"source": ("ilike", f"*{needle}*")},
+        order="created_at.desc",
+        limit=limit,
+    )
+    seen: dict[int, dict] = {}
+    for r in text_rows + source_rows:
+        seen.setdefault(r["id"], r)
+    rows = sorted(
+        seen.values(),
+        key=lambda r: r["created_at"] if isinstance(r["created_at"], str) else r["created_at"].isoformat(),
+        reverse=True,
+    )[:limit]
+    tags_by_id = _tags_for_many([r["id"] for r in rows])
+    return [_to_entry(r, tags_by_id[r["id"]]) for r in rows]
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    return sum(x * y for x, y in zip(a, b))
+
+
+def _embedding_for(row: dict) -> list[float]:
+    vec = row.get("embedding")
+    if isinstance(vec, list) and vec:
+        return [float(v) for v in vec]
+    # Backfill missing embeddings on read; the row may pre-date this feature.
+    return embed(row["text"])
+
+
+@router.get("/{entry_id}/related", response_model=list[Entry])
+def related_entries(entry_id: int, k: int = Query(default=5, ge=1, le=50)) -> list[Entry]:
+    sb = client()
+    rows = sb.select("entries", filters={"id": ("eq", entry_id)})
+    if not rows:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    query_vec = _embedding_for(rows[0])
+
+    all_rows = sb.select("entries", order="created_at.desc", limit=500)
+    scored: list[tuple[float, dict]] = []
+    for r in all_rows:
+        if r["id"] == entry_id:
+            continue
+        scored.append((_cosine(query_vec, _embedding_for(r)), r))
+    scored.sort(key=lambda kv: kv[0], reverse=True)
+    top = [r for score, r in scored[:k] if score > 0]
+    tags_by_id = _tags_for_many([r["id"] for r in top])
+    return [_to_entry(r, tags_by_id[r["id"]]) for r in top]
 
 
 @router.get("/tags/all", response_model=dict[str, int])

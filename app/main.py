@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from app.routers import (
+    ask,
     bookmarks,
     collections,
     comments,
@@ -9,6 +10,7 @@ from app.routers import (
     highlights,
     prompts,
     reactions,
+    stats,
 )
 from app.ui import router as ui_router
 
@@ -21,6 +23,8 @@ app.include_router(comments.router)
 app.include_router(collections.router)
 app.include_router(highlights.router)
 app.include_router(prompts.router)
+app.include_router(ask.router)
+app.include_router(stats.router)
 app.include_router(ui_router.router)
 
 

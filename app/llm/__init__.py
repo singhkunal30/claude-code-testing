@@ -5,7 +5,7 @@ Swap in a real client (e.g. AnthropicLLMClient) by setting it on the module.
 """
 from __future__ import annotations
 
-from app.llm.base import DigestInput, LLMClient
+from app.llm.base import DigestEntry, DigestInput, LLMClient
 from app.llm.fake import FakeLLMClient
 
 _client: LLMClient = FakeLLMClient()
@@ -28,10 +28,21 @@ def generate_digest(payload: DigestInput) -> str:
     return get_client().digest(payload)
 
 
+def embed(text: str) -> list[float]:
+    return get_client().embed(text)
+
+
+def answer(question: str, entries: list[DigestEntry]) -> str:
+    return get_client().answer(question, entries)
+
+
 __all__ = [
+    "DigestEntry",
     "DigestInput",
     "LLMClient",
+    "answer",
     "auto_tag",
+    "embed",
     "generate_digest",
     "get_client",
     "set_client",
