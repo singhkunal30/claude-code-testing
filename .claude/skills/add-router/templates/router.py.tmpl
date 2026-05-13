@@ -1,0 +1,46 @@
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+router = APIRouter(prefix="/{{resource_plural}}", tags=["{{resource_plural}}"])
+
+
+class {{ModelName}}In(BaseModel):
+    name: str
+
+
+class {{ModelName}}({{ModelName}}In):
+    id: int
+
+
+# TODO: replace with real persistence
+_store: dict[int, {{ModelName}}] = {}
+_next_id: int = 1
+
+
+@router.get("", response_model=list[{{ModelName}}])
+def list_{{resource_plural}}() -> list[{{ModelName}}]:
+    return list(_store.values())
+
+
+@router.post("", response_model={{ModelName}}, status_code=201)
+def create_{{resource_singular}}(payload: {{ModelName}}In) -> {{ModelName}}:
+    global _next_id
+    obj = {{ModelName}}(id=_next_id, **payload.model_dump())
+    _store[_next_id] = obj
+    _next_id += 1
+    return obj
+
+
+@router.get("/{item_id}", response_model={{ModelName}})
+def get_{{resource_singular}}(item_id: int) -> {{ModelName}}:
+    obj = _store.get(item_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="{{ModelName}} not found")
+    return obj
+
+
+@router.delete("/{item_id}", status_code=204)
+def delete_{{resource_singular}}(item_id: int) -> None:
+    if item_id not in _store:
+        raise HTTPException(status_code=404, detail="{{ModelName}} not found")
+    del _store[item_id]
