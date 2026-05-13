@@ -1,74 +1,95 @@
 from __future__ import annotations
 
-import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.db import db_session
 from app.llm import auto_tag
 from app.models.entry import Entry, EntryCreate
+from app.supabase import client
 
 router = APIRouter(prefix="/entries", tags=["entries"])
 
 
-def _set_tags(conn: sqlite3.Connection, entry_id: int, tag_names: list[str]) -> list[str]:
-    """Upsert tag names and link them to entry_id. Returns the resolved tag names."""
-    resolved: list[str] = []
-    for raw in tag_names:
-        name = raw.strip().lower()
-        if not name or name in resolved:
-            continue
-        conn.execute("INSERT OR IGNORE INTO tags(name) VALUES (?)", (name,))
-        tag_id = conn.execute("SELECT id FROM tags WHERE name = ?", (name,)).fetchone()["id"]
-        conn.execute(
-            "INSERT OR IGNORE INTO entry_tags(entry_id, tag_id) VALUES (?, ?)",
-            (entry_id, tag_id),
-        )
-        resolved.append(name)
-    return resolved
+def _normalize_tags(raw: list[str]) -> list[str]:
+    seen: list[str] = []
+    for name in raw:
+        n = name.strip().lower()
+        if n and n not in seen:
+            seen.append(n)
+    return seen
 
 
-def _tags_for(conn: sqlite3.Connection, entry_id: int) -> list[str]:
-    rows = conn.execute(
-        "SELECT t.name FROM tags t "
-        "JOIN entry_tags et ON et.tag_id = t.id "
-        "WHERE et.entry_id = ? ORDER BY t.name",
-        (entry_id,),
-    ).fetchall()
-    return [r["name"] for r in rows]
+def _link_tags(entry_id: int, tag_names: list[str]) -> list[str]:
+    """Upsert tag names, link them to entry_id, return resolved tag names."""
+    sb = client()
+    if not tag_names:
+        return []
+    tag_rows = sb.upsert(
+        "tags",
+        [{"name": n} for n in tag_names],
+        on_conflict="name",
+    )
+    sb.insert("entry_tags", [{"entry_id": entry_id, "tag_id": t["id"]} for t in tag_rows])
+    return _tags_for(entry_id)
 
 
-def _tags_for_many(conn: sqlite3.Connection, entry_ids: list[int]) -> dict[int, list[str]]:
+def _tags_for(entry_id: int) -> list[str]:
+    sb = client()
+    links = sb.select("entry_tags", filters={"entry_id": ("eq", entry_id)})
+    if not links:
+        return []
+    tag_rows = sb.select(
+        "tags",
+        filters={"id": ("in", [r["tag_id"] for r in links])},
+        order="name.asc",
+    )
+    return [t["name"] for t in tag_rows]
+
+
+def _tags_for_many(entry_ids: list[int]) -> dict[int, list[str]]:
     out: dict[int, list[str]] = {i: [] for i in entry_ids}
     if not entry_ids:
         return out
-    placeholders = ",".join("?" * len(entry_ids))
-    rows = conn.execute(
-        f"SELECT et.entry_id, t.name FROM entry_tags et "
-        f"JOIN tags t ON t.id = et.tag_id "
-        f"WHERE et.entry_id IN ({placeholders}) ORDER BY t.name",
-        entry_ids,
-    ).fetchall()
-    for r in rows:
-        out[r["entry_id"]].append(r["name"])
-    return out
+    sb = client()
+    links = sb.select("entry_tags", filters={"entry_id": ("in", entry_ids)})
+    tag_ids = list({l["tag_id"] for l in links})
+    if not tag_ids:
+        return out
+    tag_rows = sb.select("tags", filters={"id": ("in", tag_ids)})
+    name_by_id = {t["id"]: t["name"] for t in tag_rows}
+    grouped: dict[int, list[str]] = {i: [] for i in entry_ids}
+    for l in links:
+        grouped[l["entry_id"]].append(name_by_id[l["tag_id"]])
+    for k in grouped:
+        grouped[k].sort()
+    return grouped
+
+
+def _to_entry(row: dict, tags: list[str]) -> Entry:
+    return Entry(
+        id=row["id"],
+        text=row["text"],
+        source=row.get("source"),
+        tags=tags,
+        created_at=datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
+        if isinstance(row["created_at"], str)
+        else row["created_at"],
+    )
 
 
 @router.post("", response_model=Entry, status_code=201)
 def create_entry(payload: EntryCreate) -> Entry:
-    tag_names = payload.tags if payload.tags is not None else auto_tag(payload.text)
-    now = datetime.now(timezone.utc).isoformat()
-    with db_session() as conn:
-        cur = conn.execute(
-            "INSERT INTO entries (text, source, created_at) VALUES (?, ?, ?)",
-            (payload.text, payload.source, now),
-        )
-        new_id = cur.lastrowid
-        _set_tags(conn, new_id, tag_names)
-        row = conn.execute("SELECT * FROM entries WHERE id = ?", (new_id,)).fetchone()
-        tags = _tags_for(conn, new_id)
-    return Entry.from_row(row, tags)
+    sb = client()
+    raw_tags = payload.tags if payload.tags is not None else auto_tag(payload.text)
+    tag_names = _normalize_tags(raw_tags)
+
+    [row] = sb.insert(
+        "entries",
+        {"text": payload.text, "source": payload.source},
+    )
+    tags = _link_tags(row["id"], tag_names)
+    return _to_entry(row, tags)
 
 
 @router.get("", response_model=list[Entry])
@@ -77,54 +98,54 @@ def list_entries(
     since: datetime | None = Query(default=None),
     limit: int = Query(default=100, le=500),
 ) -> list[Entry]:
-    sql = "SELECT e.* FROM entries e WHERE 1=1"
-    params: list[object] = []
+    sb = client()
+    filters: dict = {}
     if since is not None:
-        sql += " AND e.created_at >= ?"
-        params.append(since.isoformat())
+        filters["created_at"] = ("gte", since.isoformat())
+
     if tag is not None:
-        sql += (
-            " AND e.id IN ("
-            "  SELECT et.entry_id FROM entry_tags et "
-            "  JOIN tags t ON t.id = et.tag_id "
-            "  WHERE t.name = ?"
-            ")"
-        )
-        params.append(tag.strip().lower())
-    sql += " ORDER BY e.created_at DESC LIMIT ?"
-    params.append(limit)
+        tag_rows = sb.select("tags", filters={"name": ("eq", tag.strip().lower())})
+        if not tag_rows:
+            return []
+        link_rows = sb.select("entry_tags", filters={"tag_id": ("eq", tag_rows[0]["id"])})
+        entry_ids = [l["entry_id"] for l in link_rows]
+        if not entry_ids:
+            return []
+        filters["id"] = ("in", entry_ids)
 
-    with db_session() as conn:
-        rows = conn.execute(sql, params).fetchall()
-        tags_by_id = _tags_for_many(conn, [r["id"] for r in rows])
-
-    return [Entry.from_row(r, tags_by_id[r["id"]]) for r in rows]
+    rows = sb.select("entries", filters=filters, order="created_at.desc", limit=limit)
+    tags_by_id = _tags_for_many([r["id"] for r in rows])
+    return [_to_entry(r, tags_by_id[r["id"]]) for r in rows]
 
 
 @router.get("/tags/all", response_model=dict[str, int])
 def list_tags() -> dict[str, int]:
-    with db_session() as conn:
-        rows = conn.execute(
-            "SELECT t.name, COUNT(et.entry_id) AS c "
-            "FROM tags t LEFT JOIN entry_tags et ON et.tag_id = t.id "
-            "GROUP BY t.id HAVING c > 0 ORDER BY c DESC, t.name"
-        ).fetchall()
-    return {r["name"]: r["c"] for r in rows}
+    sb = client()
+    links = sb.select("entry_tags")
+    if not links:
+        return {}
+    tag_ids = list({l["tag_id"] for l in links})
+    tag_rows = sb.select("tags", filters={"id": ("in", tag_ids)})
+    name_by_id = {t["id"]: t["name"] for t in tag_rows}
+    counts: dict[str, int] = {}
+    for l in links:
+        n = name_by_id[l["tag_id"]]
+        counts[n] = counts.get(n, 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
 
 
 @router.get("/{entry_id}", response_model=Entry)
 def get_entry(entry_id: int) -> Entry:
-    with db_session() as conn:
-        row = conn.execute("SELECT * FROM entries WHERE id = ?", (entry_id,)).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="Entry not found")
-        tags = _tags_for(conn, entry_id)
-    return Entry.from_row(row, tags)
+    sb = client()
+    rows = sb.select("entries", filters={"id": ("eq", entry_id)})
+    if not rows:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    return _to_entry(rows[0], _tags_for(entry_id))
 
 
 @router.delete("/{entry_id}", status_code=204)
 def delete_entry(entry_id: int) -> None:
-    with db_session() as conn:
-        cur = conn.execute("DELETE FROM entries WHERE id = ?", (entry_id,))
-        if cur.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Entry not found")
+    sb = client()
+    removed = sb.delete("entries", filters={"id": ("eq", entry_id)})
+    if not removed:
+        raise HTTPException(status_code=404, detail="Entry not found")

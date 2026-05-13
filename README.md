@@ -1,19 +1,33 @@
 # TIL Journal API
 
-A small FastAPI service for logging "today I learned" entries and generating periodic digests. Entries are auto-tagged by an LLM client; ships with a deterministic offline fake so it runs without an API key.
+A small FastAPI service for logging "today I learned" entries and generating periodic digests. Backed by **Supabase** (managed Postgres). Entries are auto-tagged by an offline LLM fake; swap in a real client by setting `app.llm.set_client(...)`.
 
 ## Requirements
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) for dependency management
+- A free Supabase project
 
 ## Setup
 
+### 1. Supabase project (~3 min)
+
+1. Create a project at https://supabase.com.
+2. Wait for it to spin up.
+3. Go to **Settings → API** and copy:
+   - **Project URL** → `SUPABASE_URL`
+   - **service_role secret** → `SUPABASE_KEY` (server-only — do not expose to browsers)
+4. Go to **SQL editor → New query**, paste the contents of `supabase/schema.sql`, and Run.
+
+### 2. Local environment
+
 ```bash
+cp .env.example .env
+# Edit .env, paste SUPABASE_URL and SUPABASE_KEY
 uv sync
 ```
 
-## Run
+### 3. Run
 
 ```bash
 uv run uvicorn app.main:app --reload
@@ -22,58 +36,52 @@ uv run uvicorn app.main:app --reload
 - Web UI: http://127.0.0.1:8000/
 - Interactive API docs: http://127.0.0.1:8000/docs
 
-## Tests
+### 4. Tests
 
 ```bash
 uv run pytest
 ```
+
+Tests use an in-memory Supabase fake and a `MockTransport` for the HTTP client — no network, no real Supabase needed.
 
 ## Endpoints
 
 ### Entries
 
 - `POST /entries` — log a TIL. Auto-tags if `tags` is omitted.
-  ```bash
-  curl -X POST http://127.0.0.1:8000/entries \
-    -H 'content-type: application/json' \
-    -d '{"text": "FastAPI lifespan handlers replace startup/shutdown events"}'
-  ```
-- `GET /entries?tag=<tag>&since=<iso8601>` — list entries.
-- `GET /entries/{id}` — fetch one.
-- `DELETE /entries/{id}` — delete.
+- `GET /entries?tag=<tag>&since=<iso8601>` — list.
+- `GET /entries/{id}` / `DELETE /entries/{id}`.
 - `GET /entries/tags/all` — counts per tag.
 
 ### Bookmarks
 
 - `POST /bookmarks` — save a URL with optional `title`, `notes`, `tags`.
 - `GET /bookmarks?tag=<tag>` — list.
-- `GET /bookmarks/{id}` / `DELETE /bookmarks/{id}` — read / delete.
+- `GET /bookmarks/{id}` / `DELETE /bookmarks/{id}`.
 
 ### Digests
 
-- `POST /digests/generate` body `{"period": "week" | "month", "end_date"?: "YYYY-MM-DD"}` — generate a digest covering the period ending on `end_date` (default today).
+- `POST /digests/generate` body `{"period": "week" | "month", "end_date"?: "YYYY-MM-DD"}`.
 - `GET /digests` — list recent digests.
-- `GET /digests/{id}` — fetch one.
+- `GET /digests/{id}`.
 
 ## CLI
 
 ```bash
-uv run python -m app.cli stats                       # entry/digest counts
-uv run python -m app.cli digest --period week        # generate + print digest
-uv run python -m app.cli digest --period month       # 30-day digest
+uv run python -m app.cli stats
+uv run python -m app.cli digest --period week
+uv run python -m app.cli digest --period month
 ```
 
 Pair with cron for automatic weekly digests.
 
-## Configuration
-
-| Env var        | Default                     | Purpose                          |
-| -------------- | --------------------------- | -------------------------------- |
-| `TIL_DB_PATH`  | `<repo>/til.db`             | Path to the SQLite database.     |
-
 ## Claude Code skills
 
-This repo ships with two skills (in `.claude/skills/`) that Claude Code can auto-discover:
+In `.claude/skills/`:
 
-- **`add-feature`** — scaffolds a new SQLite-backed resource (model, router, schema, tests).
-- **`log-til`** — log a TIL directly from a Claude Code session; bypasses HTTP and writes to the local DB.
+- **`add-feature`** — scaffold a new Supabase-backed resource (model, router, schema, tests) following project conventions.
+- **`log-til`** — log a TIL from a Claude Code session by invoking the API path directly. Requires `SUPABASE_URL` and `SUPABASE_KEY` set in the env.
+
+## Deployment
+
+Any platform that runs a Python web app works (Fly.io, Render, Hugging Face Spaces, Railway, etc.). Set `SUPABASE_URL` and `SUPABASE_KEY` as platform secrets. Bind `uvicorn` to `0.0.0.0` and the platform's injected `$PORT`.

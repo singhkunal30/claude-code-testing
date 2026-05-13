@@ -1,11 +1,11 @@
 ---
 name: log-til
-description: Log a "Today I Learned" entry directly into the project's SQLite database. Use when the user says things like "log: <text>", "TIL: <text>", "today I learned <text>", "journal this: <text>", or otherwise asks to record a learning into the TIL journal. Auto-tags the entry via the configured LLM client and reports what was saved.
+description: Log a "Today I Learned" entry directly into the project's Supabase database. Use when the user says things like "log: <text>", "TIL: <text>", "today I learned <text>", "journal this: <text>", or otherwise asks to record a learning into the TIL journal. Auto-tags the entry via the configured LLM client and reports what was saved. Requires SUPABASE_URL and SUPABASE_KEY to be set (typically via .env).
 ---
 
 # log-til
 
-Records a TIL entry by invoking the project's own create-entry logic against the local SQLite DB. No server needs to be running.
+Records a TIL entry by invoking the project's own create-entry logic, which writes to Supabase via the configured HTTP client. No server needs to be running, but `SUPABASE_URL` and `SUPABASE_KEY` must be present in the environment (or `.env`).
 
 ## Inputs
 
@@ -32,7 +32,7 @@ Records a TIL entry by invoking the project's own create-entry logic against the
 
 ## Conventions
 
-- The script writes to the same SQLite DB the API uses (`til.db` at the repo root, unless `TIL_DB_PATH` is set).
+- The script reads `SUPABASE_URL` / `SUPABASE_KEY` from the environment or `.env` and writes via the same `app.routers.entries.create_entry` function the HTTP API uses.
 - Do **not** start the FastAPI server to log an entry — this skill bypasses HTTP and uses the create function directly.
 - Never include the prefix words (TIL/log/etc.) in the saved `text`.
 

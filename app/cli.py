@@ -4,8 +4,8 @@ Usage:
     uv run python -m app.cli digest [--period week|month] [--end-date YYYY-MM-DD]
     uv run python -m app.cli stats
 
-Designed to be cron-friendly: writes to the same SQLite DB the API uses
-and prints the generated digest (or a brief summary) to stdout.
+Reads SUPABASE_URL / SUPABASE_KEY from the environment (or .env).
+Designed to be cron-friendly: writes the digest to stdout.
 """
 from __future__ import annotations
 
@@ -13,13 +13,12 @@ import argparse
 import sys
 from datetime import date
 
-from app.db import init_db
 from app.models.digest import DigestCreate
 from app.routers.digests import generate as generate_digest_endpoint
+from app.supabase import client
 
 
 def cmd_digest(args: argparse.Namespace) -> int:
-    init_db()
     payload = DigestCreate(
         period=args.period,
         end_date=date.fromisoformat(args.end_date) if args.end_date else None,
@@ -31,18 +30,13 @@ def cmd_digest(args: argparse.Namespace) -> int:
 
 
 def cmd_stats(_: argparse.Namespace) -> int:
-    from app.db import db_session
-
-    init_db()
-    with db_session() as conn:
-        n_entries = conn.execute("SELECT COUNT(*) AS c FROM entries").fetchone()["c"]
-        n_digests = conn.execute("SELECT COUNT(*) AS c FROM digests").fetchone()["c"]
-        latest = conn.execute(
-            "SELECT created_at FROM entries ORDER BY created_at DESC LIMIT 1"
-        ).fetchone()
+    sb = client()
+    entries = sb.select("entries", order="created_at.desc", limit=1)
+    n_entries = len(sb.select("entries", limit=500))
+    n_digests = len(sb.select("digests", limit=500))
     print(f"entries: {n_entries}")
     print(f"digests: {n_digests}")
-    print(f"latest entry: {latest['created_at'] if latest else '<none>'}")
+    print(f"latest entry: {entries[0]['created_at'] if entries else '<none>'}")
     return 0
 
 
