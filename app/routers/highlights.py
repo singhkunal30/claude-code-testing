@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.auth.base import User
+from app.auth.session import current_user
 from app.models.highlight import Highlight, HighlightCreate
+from app.routers.entries import own_entry
 from app.supabase import client
 
 router = APIRouter(prefix="/highlights", tags=["highlights"])
@@ -23,23 +26,24 @@ def _to_highlight(row: dict) -> Highlight:
 
 
 @router.post("", response_model=Highlight, status_code=201)
-def create_highlight(payload: HighlightCreate) -> Highlight:
-    sb = client()
-    if not sb.select("entries", filters={"id": ("eq", payload.entry_id)}):
-        raise HTTPException(status_code=404, detail="Entry not found")
-    [row] = sb.insert(
+def create_highlight(
+    payload: HighlightCreate, user: User = Depends(current_user)
+) -> Highlight:
+    own_entry(payload.entry_id, user.id)
+    [row] = client().insert(
         "highlights",
-        {"entry_id": payload.entry_id, "note": payload.note},
+        {"user_id": user.id, "entry_id": payload.entry_id, "note": payload.note},
     )
     return _to_highlight(row)
 
 
 @router.get("", response_model=list[Highlight])
 def list_highlights(
+    user: User = Depends(current_user),
     entry_id: int | None = Query(default=None),
     limit: int = Query(default=100, le=500),
 ) -> list[Highlight]:
-    filters: dict = {}
+    filters: dict = {"user_id": ("eq", user.id)}
     if entry_id is not None:
         filters["entry_id"] = ("eq", entry_id)
     rows = client().select(
@@ -52,15 +56,27 @@ def list_highlights(
 
 
 @router.get("/{highlight_id}", response_model=Highlight)
-def get_highlight(highlight_id: int) -> Highlight:
-    rows = client().select("highlights", filters={"id": ("eq", highlight_id)})
+def get_highlight(
+    highlight_id: int, user: User = Depends(current_user)
+) -> Highlight:
+    rows = client().select(
+        "highlights",
+        filters={"id": ("eq", highlight_id), "user_id": ("eq", user.id)},
+    )
     if not rows:
         raise HTTPException(status_code=404, detail="Highlight not found")
     return _to_highlight(rows[0])
 
 
 @router.delete("/{highlight_id}", status_code=204)
-def delete_highlight(highlight_id: int) -> None:
-    removed = client().delete("highlights", filters={"id": ("eq", highlight_id)})
-    if not removed:
+def delete_highlight(
+    highlight_id: int, user: User = Depends(current_user)
+) -> None:
+    sb = client()
+    rows = sb.select(
+        "highlights",
+        filters={"id": ("eq", highlight_id), "user_id": ("eq", user.id)},
+    )
+    if not rows:
         raise HTTPException(status_code=404, detail="Highlight not found")
+    sb.delete("highlights", filters={"id": ("eq", highlight_id)})

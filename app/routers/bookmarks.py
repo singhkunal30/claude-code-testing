@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.auth.base import User
+from app.auth.session import current_user
 from app.models.bookmark import Bookmark, BookmarkCreate
 from app.supabase import client
 
@@ -19,12 +21,14 @@ def _normalize_tags(raw: list[str]) -> list[str]:
     return seen
 
 
-def _link_tags(bookmark_id: int, tag_names: list[str]) -> list[str]:
+def _link_tags(bookmark_id: int, tag_names: list[str], user_id: str) -> list[str]:
     sb = client()
     if not tag_names:
         return []
     tag_rows = sb.upsert(
-        "tags", [{"name": n} for n in tag_names], on_conflict="name"
+        "tags",
+        [{"name": n, "user_id": user_id} for n in tag_names],
+        on_conflict="user_id,name",
     )
     sb.insert(
         "bookmark_tags",
@@ -64,6 +68,16 @@ def _tags_for_many(bookmark_ids: list[int]) -> dict[int, list[str]]:
     return out
 
 
+def _own_bookmark(bookmark_id: int, user_id: str) -> dict:
+    rows = client().select(
+        "bookmarks",
+        filters={"id": ("eq", bookmark_id), "user_id": ("eq", user_id)},
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Bookmark not found")
+    return rows[0]
+
+
 def _to_bookmark(row: dict, tags: list[str]) -> Bookmark:
     created = row["created_at"]
     if isinstance(created, str):
@@ -79,26 +93,37 @@ def _to_bookmark(row: dict, tags: list[str]) -> Bookmark:
 
 
 @router.post("", response_model=Bookmark, status_code=201)
-def create_bookmark(payload: BookmarkCreate) -> Bookmark:
+def create_bookmark(
+    payload: BookmarkCreate, user: User = Depends(current_user)
+) -> Bookmark:
     sb = client()
     [row] = sb.insert(
         "bookmarks",
-        {"url": payload.url, "title": payload.title, "notes": payload.notes},
+        {
+            "user_id": user.id,
+            "url": payload.url,
+            "title": payload.title,
+            "notes": payload.notes,
+        },
     )
     tag_names = _normalize_tags(payload.tags or [])
-    tags = _link_tags(row["id"], tag_names)
+    tags = _link_tags(row["id"], tag_names, user.id)
     return _to_bookmark(row, tags)
 
 
 @router.get("", response_model=list[Bookmark])
 def list_bookmarks(
+    user: User = Depends(current_user),
     tag: str | None = Query(default=None),
     limit: int = Query(default=100, le=500),
 ) -> list[Bookmark]:
     sb = client()
-    filters: dict = {}
+    filters: dict = {"user_id": ("eq", user.id)}
     if tag is not None:
-        tag_rows = sb.select("tags", filters={"name": ("eq", tag.strip().lower())})
+        tag_rows = sb.select(
+            "tags",
+            filters={"name": ("eq", tag.strip().lower()), "user_id": ("eq", user.id)},
+        )
         if not tag_rows:
             return []
         link_rows = sb.select(
@@ -115,17 +140,16 @@ def list_bookmarks(
 
 
 @router.get("/{bookmark_id}", response_model=Bookmark)
-def get_bookmark(bookmark_id: int) -> Bookmark:
-    sb = client()
-    rows = sb.select("bookmarks", filters={"id": ("eq", bookmark_id)})
-    if not rows:
-        raise HTTPException(status_code=404, detail="Bookmark not found")
-    return _to_bookmark(rows[0], _tags_for(bookmark_id))
+def get_bookmark(
+    bookmark_id: int, user: User = Depends(current_user)
+) -> Bookmark:
+    row = _own_bookmark(bookmark_id, user.id)
+    return _to_bookmark(row, _tags_for(bookmark_id))
 
 
 @router.delete("/{bookmark_id}", status_code=204)
-def delete_bookmark(bookmark_id: int) -> None:
-    sb = client()
-    removed = sb.delete("bookmarks", filters={"id": ("eq", bookmark_id)})
-    if not removed:
-        raise HTTPException(status_code=404, detail="Bookmark not found")
+def delete_bookmark(
+    bookmark_id: int, user: User = Depends(current_user)
+) -> None:
+    _own_bookmark(bookmark_id, user.id)
+    client().delete("bookmarks", filters={"id": ("eq", bookmark_id)})

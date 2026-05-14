@@ -3,8 +3,10 @@ from __future__ import annotations
 import random
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.auth.base import User
+from app.auth.session import current_user
 from app.models.prompt import Prompt, PromptCreate
 from app.supabase import client
 
@@ -24,20 +26,23 @@ def _to_prompt(row: dict) -> Prompt:
 
 
 @router.post("", response_model=Prompt, status_code=201)
-def create_prompt(payload: PromptCreate) -> Prompt:
+def create_prompt(
+    payload: PromptCreate, user: User = Depends(current_user)
+) -> Prompt:
     [row] = client().insert(
         "prompts",
-        {"text": payload.text, "active": payload.active},
+        {"user_id": user.id, "text": payload.text, "active": payload.active},
     )
     return _to_prompt(row)
 
 
 @router.get("", response_model=list[Prompt])
 def list_prompts(
+    user: User = Depends(current_user),
     active: bool | None = Query(default=None),
     limit: int = Query(default=100, le=500),
 ) -> list[Prompt]:
-    filters: dict = {}
+    filters: dict = {"user_id": ("eq", user.id)}
     if active is not None:
         filters["active"] = ("eq", active)
     rows = client().select(
@@ -50,23 +55,34 @@ def list_prompts(
 
 
 @router.get("/random", response_model=Prompt)
-def random_prompt() -> Prompt:
-    rows = client().select("prompts", filters={"active": ("eq", True)})
+def random_prompt(user: User = Depends(current_user)) -> Prompt:
+    rows = client().select(
+        "prompts",
+        filters={"user_id": ("eq", user.id), "active": ("eq", True)},
+    )
     if not rows:
         raise HTTPException(status_code=404, detail="No active prompts")
     return _to_prompt(random.choice(rows))
 
 
 @router.get("/{prompt_id}", response_model=Prompt)
-def get_prompt(prompt_id: int) -> Prompt:
-    rows = client().select("prompts", filters={"id": ("eq", prompt_id)})
+def get_prompt(prompt_id: int, user: User = Depends(current_user)) -> Prompt:
+    rows = client().select(
+        "prompts",
+        filters={"id": ("eq", prompt_id), "user_id": ("eq", user.id)},
+    )
     if not rows:
         raise HTTPException(status_code=404, detail="Prompt not found")
     return _to_prompt(rows[0])
 
 
 @router.delete("/{prompt_id}", status_code=204)
-def delete_prompt(prompt_id: int) -> None:
-    removed = client().delete("prompts", filters={"id": ("eq", prompt_id)})
-    if not removed:
+def delete_prompt(prompt_id: int, user: User = Depends(current_user)) -> None:
+    sb = client()
+    rows = sb.select(
+        "prompts",
+        filters={"id": ("eq", prompt_id), "user_id": ("eq", user.id)},
+    )
+    if not rows:
         raise HTTPException(status_code=404, detail="Prompt not found")
+    sb.delete("prompts", filters={"id": ("eq", prompt_id)})

@@ -80,10 +80,20 @@ pre.digest { background: white; border: 1px solid #e2e2e2; border-radius: 6px;
 .share-url { background: #f4f4f4; padding: .25rem .5rem; border-radius: 3px;
              font-family: monospace; font-size: .8rem; user-select: all; }
 .note { color: #888; font-size: .85rem; margin-top: .5rem; }
+.user-chip { font-size: .85rem; color: #444; margin-left: .5rem;
+             padding: 2px 8px; background: #eef; border-radius: 10px; }
 """
 
 
-def page(title: str, body: str) -> str:
+def page(title: str, body: str, user_email: str | None = None) -> str:
+    user_chunk = (
+        f"""<span class="user-chip">{escape(user_email)}</span>
+    <form class="inline" method="post" action="/logout">
+      <button class="btn-link" type="submit">Sign out</button>
+    </form>"""
+        if user_email
+        else ""
+    )
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -102,8 +112,44 @@ def page(title: str, body: str) -> str:
     <a href="/ui/ask">Ask</a>
     <a href="/export.md">Export</a>
     <a href="/docs">API</a>
+    {user_chunk}
   </nav>
 </header>
+{body}
+</body>
+</html>"""
+
+
+def auth_page(mode: str, error: str | None = None) -> str:
+    """Render /login or /signup. `mode` is 'login' or 'signup'."""
+    title = "Sign in" if mode == "login" else "Create your journal"
+    button = "Sign in" if mode == "login" else "Create account"
+    other_label = "Need an account? Sign up" if mode == "login" else "Already have an account? Sign in"
+    other_href = "/signup" if mode == "login" else "/login"
+    action = f"/{mode}"
+    err_html = f'<p style="color:#c33">{escape(error)}</p>' if error else ""
+    body = f"""<section style="max-width:380px;margin:2rem auto">
+  <h2>{title}</h2>
+  {err_html}
+  <form method="post" action="{action}">
+    <label>Email</label>
+    <input type="email" name="email" required autocomplete="email">
+    <label>Password</label>
+    <input type="password" name="password" required minlength="6" autocomplete="{'current-password' if mode == 'login' else 'new-password'}">
+    <button type="submit">{button}</button>
+  </form>
+  <p><a href="{other_href}">{other_label}</a></p>
+</section>"""
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title} · TIL Journal</title>
+<style>{_CSS}</style>
+</head>
+<body>
+<header><h1>📓 TIL Journal</h1></header>
 {body}
 </body>
 </html>"""
@@ -222,6 +268,7 @@ def home(
     highlighted_ids: set[int],
     daily_prompt: str | None = None,
     q: str = "",
+    user_email: str | None = None,
 ) -> str:
     prompt_html = (
         f'<div class="banner">💭 <strong>Today\'s prompt:</strong> {escape(daily_prompt)}</div>'
@@ -255,10 +302,10 @@ def home(
     {bookmarks_html}
   </section>
 </div>"""
-    return page("Home", body)
+    return page("Home", body, user_email)
 
 
-def digests_page(digests: list[Digest]) -> str:
+def digests_page(digests: list[Digest], user_email: str | None = None) -> str:
     items = (
         "".join(
             f'<div class="card"><strong>{d.period.capitalize()}: '
@@ -282,10 +329,10 @@ def digests_page(digests: list[Digest]) -> str:
   </form>
   {items}
 </section>"""
-    return page("Digests", body)
+    return page("Digests", body, user_email)
 
 
-def stats_page(s: Stats) -> str:
+def stats_page(s: Stats, user_email: str | None = None) -> str:
     max_count = max((w.count for w in s.weekly_counts), default=1) or 1
     bars = "".join(
         f'<div class="bar" title="{w.week_start}: {w.count}" '
@@ -313,13 +360,14 @@ def stats_page(s: Stats) -> str:
   <h2>Top tags</h2>
   <p>{tag_html}</p>
 </section>"""
-    return page("Stats", body)
+    return page("Stats", body, user_email)
 
 
 def ask_page(
     question: str = "",
     answer: str | None = None,
     sources: list[Entry] | None = None,
+    user_email: str | None = None,
 ) -> str:
     answer_html = ""
     if answer is not None:
@@ -346,7 +394,7 @@ def ask_page(
   </form>
   {answer_html}
 </section>"""
-    return page("Ask", body)
+    return page("Ask", body, user_email)
 
 
 def share_view(e: Entry) -> str:

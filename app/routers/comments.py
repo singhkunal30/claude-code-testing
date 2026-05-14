@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from app.auth.base import User
+from app.auth.session import current_user
 from app.models.comment import Comment, CommentCreate
+from app.routers.entries import own_entry
 from app.supabase import client
 
 router = APIRouter(tags=["comments"])
@@ -37,23 +40,25 @@ def _build_tree(rows: list[dict]) -> list[Comment]:
     return roots
 
 
-def _ensure_entry(entry_id: int) -> None:
-    rows = client().select("entries", filters={"id": ("eq", entry_id)})
-    if not rows:
-        raise HTTPException(status_code=404, detail="Entry not found")
-
-
 @router.post("/entries/{entry_id}/comments", response_model=Comment, status_code=201)
-def create_comment(entry_id: int, payload: CommentCreate) -> Comment:
-    _ensure_entry(entry_id)
+def create_comment(
+    entry_id: int,
+    payload: CommentCreate,
+    user: User = Depends(current_user),
+) -> Comment:
+    own_entry(entry_id, user.id)
     sb = client()
     if payload.parent_comment_id is not None:
-        parent = sb.select("comments", filters={"id": ("eq", payload.parent_comment_id)})
+        parent = sb.select(
+            "comments",
+            filters={"id": ("eq", payload.parent_comment_id), "user_id": ("eq", user.id)},
+        )
         if not parent or parent[0]["entry_id"] != entry_id:
             raise HTTPException(status_code=400, detail="Invalid parent_comment_id")
     [row] = sb.insert(
         "comments",
         {
+            "user_id": user.id,
             "entry_id": entry_id,
             "parent_comment_id": payload.parent_comment_id,
             "author": payload.author,
@@ -64,18 +69,25 @@ def create_comment(entry_id: int, payload: CommentCreate) -> Comment:
 
 
 @router.get("/entries/{entry_id}/comments", response_model=list[Comment])
-def list_comments(entry_id: int) -> list[Comment]:
-    _ensure_entry(entry_id)
+def list_comments(
+    entry_id: int, user: User = Depends(current_user)
+) -> list[Comment]:
+    own_entry(entry_id, user.id)
     rows = client().select(
         "comments",
-        filters={"entry_id": ("eq", entry_id)},
+        filters={"entry_id": ("eq", entry_id), "user_id": ("eq", user.id)},
         order="created_at.asc",
     )
     return _build_tree(rows)
 
 
 @router.delete("/comments/{comment_id}", status_code=204)
-def delete_comment(comment_id: int) -> None:
-    removed = client().delete("comments", filters={"id": ("eq", comment_id)})
-    if not removed:
+def delete_comment(comment_id: int, user: User = Depends(current_user)) -> None:
+    sb = client()
+    rows = sb.select(
+        "comments",
+        filters={"id": ("eq", comment_id), "user_id": ("eq", user.id)},
+    )
+    if not rows:
         raise HTTPException(status_code=404, detail="Comment not found")
+    sb.delete("comments", filters={"id": ("eq", comment_id)})

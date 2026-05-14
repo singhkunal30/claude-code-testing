@@ -17,6 +17,7 @@ load_dotenv(override=False)
 class Settings(BaseModel):
     supabase_url: str
     supabase_key: str
+    supabase_anon_key: str = ""
     supabase_schema: str = "public"
 
 
@@ -24,6 +25,7 @@ class Settings(BaseModel):
 def settings() -> Settings:
     url = os.environ.get("SUPABASE_URL", "").rstrip("/")
     key = os.environ.get("SUPABASE_KEY", "")
+    anon = os.environ.get("SUPABASE_ANON_KEY", "")
     if not url or not key:
         raise RuntimeError(
             "SUPABASE_URL and SUPABASE_KEY must be set. "
@@ -33,5 +35,6 @@ def settings() -> Settings:
     return Settings(
         supabase_url=url,
         supabase_key=key,
+        supabase_anon_key=anon,
         supabase_schema=os.environ.get("SUPABASE_SCHEMA", "public"),
     )

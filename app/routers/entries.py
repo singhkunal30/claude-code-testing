@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.auth.base import User
+from app.auth.session import current_user
 from app.llm import auto_tag, embed
 from app.models.entry import Entry, EntryCreate
 from app.supabase import client
@@ -20,15 +22,15 @@ def _normalize_tags(raw: list[str]) -> list[str]:
     return seen
 
 
-def _link_tags(entry_id: int, tag_names: list[str]) -> list[str]:
-    """Upsert tag names, link them to entry_id, return resolved tag names."""
+def _link_tags(entry_id: int, tag_names: list[str], user_id: str) -> list[str]:
+    """Upsert tag names (scoped to user), link them, return resolved names."""
     sb = client()
     if not tag_names:
         return []
     tag_rows = sb.upsert(
         "tags",
-        [{"name": n} for n in tag_names],
-        on_conflict="name",
+        [{"name": n, "user_id": user_id} for n in tag_names],
+        on_conflict="user_id,name",
     )
     sb.insert("entry_tags", [{"entry_id": entry_id, "tag_id": t["id"]} for t in tag_rows])
     return _tags_for(entry_id)
@@ -66,6 +68,17 @@ def _tags_for_many(entry_ids: list[int]) -> dict[int, list[str]]:
     return grouped
 
 
+def own_entry(entry_id: int, user_id: str) -> dict:
+    """Fetch a row only if it belongs to `user_id`. Raise 404 otherwise."""
+    rows = client().select(
+        "entries",
+        filters={"id": ("eq", entry_id), "user_id": ("eq", user_id)},
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    return rows[0]
+
+
 def _to_entry(row: dict, tags: list[str]) -> Entry:
     return Entry(
         id=row["id"],
@@ -80,7 +93,7 @@ def _to_entry(row: dict, tags: list[str]) -> Entry:
 
 
 @router.post("", response_model=Entry, status_code=201)
-def create_entry(payload: EntryCreate) -> Entry:
+def create_entry(payload: EntryCreate, user: User = Depends(current_user)) -> Entry:
     sb = client()
     raw_tags = payload.tags if payload.tags is not None else auto_tag(payload.text)
     tag_names = _normalize_tags(raw_tags)
@@ -88,28 +101,33 @@ def create_entry(payload: EntryCreate) -> Entry:
     [row] = sb.insert(
         "entries",
         {
+            "user_id": user.id,
             "text": payload.text,
             "source": payload.source,
             "embedding": embed(payload.text),
         },
     )
-    tags = _link_tags(row["id"], tag_names)
+    tags = _link_tags(row["id"], tag_names, user.id)
     return _to_entry(row, tags)
 
 
 @router.get("", response_model=list[Entry])
 def list_entries(
+    user: User = Depends(current_user),
     tag: str | None = Query(default=None),
     since: datetime | None = Query(default=None),
     limit: int = Query(default=100, le=500),
 ) -> list[Entry]:
     sb = client()
-    filters: dict = {}
+    filters: dict = {"user_id": ("eq", user.id)}
     if since is not None:
         filters["created_at"] = ("gte", since.isoformat())
 
     if tag is not None:
-        tag_rows = sb.select("tags", filters={"name": ("eq", tag.strip().lower())})
+        tag_rows = sb.select(
+            "tags",
+            filters={"name": ("eq", tag.strip().lower()), "user_id": ("eq", user.id)},
+        )
         if not tag_rows:
             return []
         link_rows = sb.select("entry_tags", filters={"tag_id": ("eq", tag_rows[0]["id"])})
@@ -125,6 +143,7 @@ def list_entries(
 
 @router.get("/search", response_model=list[Entry])
 def search_entries(
+    user: User = Depends(current_user),
     q: str = Query(min_length=1),
     limit: int = Query(default=50, le=500),
 ) -> list[Entry]:
@@ -134,13 +153,13 @@ def search_entries(
         return []
     text_rows = sb.select(
         "entries",
-        filters={"text": ("ilike", f"*{needle}*")},
+        filters={"user_id": ("eq", user.id), "text": ("ilike", f"*{needle}*")},
         order="created_at.desc",
         limit=limit,
     )
     source_rows = sb.select(
         "entries",
-        filters={"source": ("ilike", f"*{needle}*")},
+        filters={"user_id": ("eq", user.id), "source": ("ilike", f"*{needle}*")},
         order="created_at.desc",
         limit=limit,
     )
@@ -166,19 +185,24 @@ def _embedding_for(row: dict) -> list[float]:
     vec = row.get("embedding")
     if isinstance(vec, list) and vec:
         return [float(v) for v in vec]
-    # Backfill missing embeddings on read; the row may pre-date this feature.
     return embed(row["text"])
 
 
 @router.get("/{entry_id}/related", response_model=list[Entry])
-def related_entries(entry_id: int, k: int = Query(default=5, ge=1, le=50)) -> list[Entry]:
-    sb = client()
-    rows = sb.select("entries", filters={"id": ("eq", entry_id)})
-    if not rows:
-        raise HTTPException(status_code=404, detail="Entry not found")
-    query_vec = _embedding_for(rows[0])
+def related_entries(
+    entry_id: int,
+    user: User = Depends(current_user),
+    k: int = Query(default=5, ge=1, le=50),
+) -> list[Entry]:
+    own = own_entry(entry_id, user.id)
+    query_vec = _embedding_for(own)
 
-    all_rows = sb.select("entries", order="created_at.desc", limit=500)
+    all_rows = client().select(
+        "entries",
+        filters={"user_id": ("eq", user.id)},
+        order="created_at.desc",
+        limit=500,
+    )
     scored: list[tuple[float, dict]] = []
     for r in all_rows:
         if r["id"] == entry_id:
@@ -191,9 +215,13 @@ def related_entries(entry_id: int, k: int = Query(default=5, ge=1, le=50)) -> li
 
 
 @router.get("/tags/all", response_model=dict[str, int])
-def list_tags() -> dict[str, int]:
+def list_tags(user: User = Depends(current_user)) -> dict[str, int]:
     sb = client()
-    links = sb.select("entry_tags")
+    own_entry_rows = sb.select("entries", filters={"user_id": ("eq", user.id)}, columns="id")
+    own_entry_ids = [r["id"] for r in own_entry_rows]
+    if not own_entry_ids:
+        return {}
+    links = sb.select("entry_tags", filters={"entry_id": ("in", own_entry_ids)})
     if not links:
         return {}
     tag_ids = list({l["tag_id"] for l in links})
@@ -201,23 +229,20 @@ def list_tags() -> dict[str, int]:
     name_by_id = {t["id"]: t["name"] for t in tag_rows}
     counts: dict[str, int] = {}
     for l in links:
-        n = name_by_id[l["tag_id"]]
+        n = name_by_id.get(l["tag_id"])
+        if n is None:
+            continue
         counts[n] = counts.get(n, 0) + 1
     return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
 
 
 @router.get("/{entry_id}", response_model=Entry)
-def get_entry(entry_id: int) -> Entry:
-    sb = client()
-    rows = sb.select("entries", filters={"id": ("eq", entry_id)})
-    if not rows:
-        raise HTTPException(status_code=404, detail="Entry not found")
-    return _to_entry(rows[0], _tags_for(entry_id))
+def get_entry(entry_id: int, user: User = Depends(current_user)) -> Entry:
+    row = own_entry(entry_id, user.id)
+    return _to_entry(row, _tags_for(entry_id))
 
 
 @router.delete("/{entry_id}", status_code=204)
-def delete_entry(entry_id: int) -> None:
-    sb = client()
-    removed = sb.delete("entries", filters={"id": ("eq", entry_id)})
-    if not removed:
-        raise HTTPException(status_code=404, detail="Entry not found")
+def delete_entry(entry_id: int, user: User = Depends(current_user)) -> None:
+    own_entry(entry_id, user.id)  # 404s if not owned
+    client().delete("entries", filters={"id": ("eq", entry_id)})

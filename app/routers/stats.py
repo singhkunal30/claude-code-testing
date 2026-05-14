@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from app.auth.base import User
+from app.auth.session import current_user
 from app.models.stats import Stats, WeeklyCount
 from app.supabase import client
 
@@ -16,7 +18,7 @@ def _row_date(row: dict) -> date:
         return datetime.fromisoformat(created.replace("Z", "+00:00")).astimezone(timezone.utc).date()
     if isinstance(created, datetime):
         return created.astimezone(timezone.utc).date() if created.tzinfo else created.date()
-    return created  # already a date
+    return created
 
 
 def _week_start(d: date) -> date:
@@ -49,9 +51,14 @@ def _streaks(dates: list[date], today: date) -> tuple[int, int]:
 
 
 @router.get("/stats", response_model=Stats)
-def stats() -> Stats:
+def stats(user: User = Depends(current_user)) -> Stats:
     sb = client()
-    entry_rows = sb.select("entries", order="created_at.desc", limit=5000)
+    entry_rows = sb.select(
+        "entries",
+        filters={"user_id": ("eq", user.id)},
+        order="created_at.desc",
+        limit=5000,
+    )
 
     today = datetime.now(timezone.utc).date()
     this_week_start = _week_start(today)
@@ -72,8 +79,12 @@ def stats() -> Stats:
         for wk, c in sorted(counts_by_week.items())
     ]
 
-    tag_links = sb.select("entry_tags")
-    tag_rows = sb.select("tags") if tag_links else []
+    own_ids = [r["id"] for r in entry_rows]
+    if own_ids:
+        tag_links = sb.select("entry_tags", filters={"entry_id": ("in", own_ids)})
+    else:
+        tag_links = []
+    tag_rows = sb.select("tags", filters={"user_id": ("eq", user.id)}) if tag_links else []
     name_by_id = {t["id"]: t["name"] for t in tag_rows}
     tag_counts: dict[str, int] = {}
     for link in tag_links:

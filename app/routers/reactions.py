@@ -1,17 +1,14 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from app.auth.base import User
+from app.auth.session import current_user
 from app.models.reaction import Reaction, ReactionCreate
+from app.routers.entries import own_entry
 from app.supabase import client
 
 router = APIRouter(prefix="/entries/{entry_id}/reactions", tags=["reactions"])
-
-
-def _ensure_entry(entry_id: int) -> None:
-    rows = client().select("entries", filters={"id": ("eq", entry_id)})
-    if not rows:
-        raise HTTPException(status_code=404, detail="Entry not found")
 
 
 def _list_reactions(entry_id: int) -> list[Reaction]:
@@ -24,14 +21,18 @@ def _list_reactions(entry_id: int) -> list[Reaction]:
 
 
 @router.get("", response_model=list[Reaction])
-def list_reactions(entry_id: int) -> list[Reaction]:
-    _ensure_entry(entry_id)
+def list_reactions(entry_id: int, user: User = Depends(current_user)) -> list[Reaction]:
+    own_entry(entry_id, user.id)
     return _list_reactions(entry_id)
 
 
 @router.post("", response_model=Reaction, status_code=201)
-def react(entry_id: int, payload: ReactionCreate) -> Reaction:
-    _ensure_entry(entry_id)
+def react(
+    entry_id: int,
+    payload: ReactionCreate,
+    user: User = Depends(current_user),
+) -> Reaction:
+    own_entry(entry_id, user.id)
     sb = client()
     emoji = payload.emoji.strip()
     if not emoji:
@@ -50,8 +51,10 @@ def react(entry_id: int, payload: ReactionCreate) -> Reaction:
 
 
 @router.delete("/{emoji}", status_code=204)
-def remove_reaction(entry_id: int, emoji: str) -> None:
-    _ensure_entry(entry_id)
+def remove_reaction(
+    entry_id: int, emoji: str, user: User = Depends(current_user)
+) -> None:
+    own_entry(entry_id, user.id)
     removed = client().delete(
         "entry_reactions",
         filters={"entry_id": ("eq", entry_id), "emoji": ("eq", emoji)},

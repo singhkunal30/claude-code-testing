@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from app.auth.base import User
+from app.auth.session import current_user
 from app.llm import answer, embed
 from app.llm.base import DigestEntry
 from app.models.ask import AskRequest, AskResponse
@@ -12,10 +14,15 @@ router = APIRouter(tags=["ask"])
 
 
 @router.post("/ask", response_model=AskResponse)
-def ask(payload: AskRequest) -> AskResponse:
+def ask(payload: AskRequest, user: User = Depends(current_user)) -> AskResponse:
     sb = client()
     query_vec = embed(payload.question)
-    all_rows = sb.select("entries", order="created_at.desc", limit=500)
+    all_rows = sb.select(
+        "entries",
+        filters={"user_id": ("eq", user.id)},
+        order="created_at.desc",
+        limit=500,
+    )
 
     scored = [(_cosine(query_vec, _embedding_for(r)), r) for r in all_rows]
     scored.sort(key=lambda kv: kv[0], reverse=True)

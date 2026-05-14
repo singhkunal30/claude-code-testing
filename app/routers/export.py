@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import PlainTextResponse
 
+from app.auth.base import User
+from app.auth.session import current_user
 from app.routers.entries import _tags_for_many, _to_entry
 from app.supabase import client
 
@@ -12,9 +14,14 @@ router = APIRouter(tags=["export"])
 
 
 @router.get("/export.json")
-def export_json() -> list[dict]:
+def export_json(user: User = Depends(current_user)) -> list[dict]:
     sb = client()
-    rows = sb.select("entries", order="created_at.desc", limit=5000)
+    rows = sb.select(
+        "entries",
+        filters={"user_id": ("eq", user.id)},
+        order="created_at.desc",
+        limit=5000,
+    )
     tags_by_id = _tags_for_many([r["id"] for r in rows])
     return [
         _to_entry(r, tags_by_id[r["id"]]).model_dump(mode="json", exclude={"share_token"})
@@ -23,9 +30,14 @@ def export_json() -> list[dict]:
 
 
 @router.get("/export.md", response_class=PlainTextResponse)
-def export_markdown() -> PlainTextResponse:
+def export_markdown(user: User = Depends(current_user)) -> PlainTextResponse:
     sb = client()
-    rows = sb.select("entries", order="created_at.desc", limit=5000)
+    rows = sb.select(
+        "entries",
+        filters={"user_id": ("eq", user.id)},
+        order="created_at.desc",
+        limit=5000,
+    )
     tags_by_id = _tags_for_many([r["id"] for r in rows])
     entries = [_to_entry(r, tags_by_id[r["id"]]) for r in rows]
 

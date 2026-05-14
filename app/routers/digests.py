@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from app.auth.base import User
+from app.auth.session import current_user
 from app.llm import generate_digest
 from app.llm.base import DigestEntry, DigestInput
 from app.models.digest import Digest, DigestCreate
@@ -42,7 +44,9 @@ def _to_digest(row: dict) -> Digest:
 
 
 @router.post("/generate", response_model=Digest, status_code=201)
-def generate(payload: DigestCreate) -> Digest:
+def generate(
+    payload: DigestCreate, user: User = Depends(current_user)
+) -> Digest:
     end = payload.end_date or datetime.now(timezone.utc).date()
     start, end = _period_range(payload.period, end)
 
@@ -50,12 +54,12 @@ def generate(payload: DigestCreate) -> Digest:
     rows = sb.select(
         "entries",
         filters={
+            "user_id": ("eq", user.id),
             "created_at": ("gte", start.isoformat()),
         },
         order="created_at.asc",
         limit=500,
     )
-    # Filter the upper bound client-side (PostgREST lte on date+time is fiddly)
     end_str = (end + timedelta(days=1)).isoformat()
     rows = [r for r in rows if (r["created_at"] if isinstance(r["created_at"], str) else r["created_at"].isoformat()) < end_str]
 
@@ -78,6 +82,7 @@ def generate(payload: DigestCreate) -> Digest:
     [row] = sb.insert(
         "digests",
         {
+            "user_id": user.id,
             "period": payload.period,
             "start_date": start.isoformat(),
             "end_date": end.isoformat(),
@@ -89,16 +94,24 @@ def generate(payload: DigestCreate) -> Digest:
 
 
 @router.get("", response_model=list[Digest])
-def list_digests(limit: int = 50) -> list[Digest]:
-    sb = client()
-    rows = sb.select("digests", order="created_at.desc", limit=limit)
+def list_digests(
+    user: User = Depends(current_user), limit: int = 50
+) -> list[Digest]:
+    rows = client().select(
+        "digests",
+        filters={"user_id": ("eq", user.id)},
+        order="created_at.desc",
+        limit=limit,
+    )
     return [_to_digest(r) for r in rows]
 
 
 @router.get("/{digest_id}", response_model=Digest)
-def get_digest(digest_id: int) -> Digest:
-    sb = client()
-    rows = sb.select("digests", filters={"id": ("eq", digest_id)})
+def get_digest(digest_id: int, user: User = Depends(current_user)) -> Digest:
+    rows = client().select(
+        "digests",
+        filters={"id": ("eq", digest_id), "user_id": ("eq", user.id)},
+    )
     if not rows:
         raise HTTPException(status_code=404, detail="Digest not found")
     return _to_digest(rows[0])
