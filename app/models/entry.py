@@ -18,6 +18,7 @@ class Entry(BaseModel):
     source: str | None
     tags: list[str]
     created_at: datetime
+    share_token: str | None = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row, tags: list[str]) -> "Entry":

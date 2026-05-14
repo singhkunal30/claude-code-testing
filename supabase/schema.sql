@@ -6,17 +6,20 @@
 --  entries
 -- =========
 CREATE TABLE IF NOT EXISTS public.entries (
-    id          BIGSERIAL PRIMARY KEY,
-    text        TEXT NOT NULL,
-    source      TEXT,
-    embedding   JSONB,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    id           BIGSERIAL PRIMARY KEY,
+    text         TEXT NOT NULL,
+    source       TEXT,
+    embedding    JSONB,
+    share_token  TEXT UNIQUE,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Adopt the embedding column on pre-existing schemas.
-ALTER TABLE public.entries ADD COLUMN IF NOT EXISTS embedding JSONB;
+-- Adopt new columns on pre-existing schemas.
+ALTER TABLE public.entries ADD COLUMN IF NOT EXISTS embedding   JSONB;
+ALTER TABLE public.entries ADD COLUMN IF NOT EXISTS share_token TEXT UNIQUE;
 
-CREATE INDEX IF NOT EXISTS idx_entries_created_at ON public.entries(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_entries_created_at  ON public.entries(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_entries_share_token ON public.entries(share_token);
 
 -- ======
 --  tags

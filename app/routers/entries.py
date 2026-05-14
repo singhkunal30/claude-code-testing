@@ -75,6 +75,7 @@ def _to_entry(row: dict, tags: list[str]) -> Entry:
         created_at=datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
         if isinstance(row["created_at"], str)
         else row["created_at"],
+        share_token=row.get("share_token"),
     )
 
 

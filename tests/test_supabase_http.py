@@ -116,6 +116,26 @@ def test_delete_sends_filters_and_returns_rows() -> None:
     assert rows == [{"id": 7}]
 
 
+def test_update_sends_patch_with_filters() -> None:
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["url"] = str(request.url)
+        seen["body"] = json.loads(request.content)
+        seen["headers"] = dict(request.headers)
+        return httpx.Response(200, json=[{"id": 7, "share_token": "abc"}])
+
+    c = _make_client(handler)
+    rows = c.update("entries", {"share_token": "abc"}, filters={"id": ("eq", 7)})
+
+    assert seen["method"] == "PATCH"
+    assert "id=eq.7" in seen["url"]
+    assert seen["body"] == {"share_token": "abc"}
+    assert seen["headers"]["prefer"] == "return=representation"
+    assert rows == [{"id": 7, "share_token": "abc"}]
+
+
 def test_4xx_raises() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, text="Unauthorized")

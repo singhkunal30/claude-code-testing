@@ -45,6 +45,8 @@ class SupabaseClient(Protocol):
         on_conflict: str,
     ) -> list[Row]: ...
 
+    def update(self, table: str, values: Row, *, filters: Filters) -> list[Row]: ...
+
     def delete(self, table: str, *, filters: Filters) -> list[Row]: ...
 
 
@@ -116,6 +118,15 @@ class _HttpClient:
             params=[("on_conflict", on_conflict)],
             content=json.dumps(rows if isinstance(rows, list) else [rows]),
             headers={"Prefer": "return=representation,resolution=merge-duplicates"},
+        )
+
+    def update(self, table: str, values: Row, *, filters: Filters) -> list[Row]:
+        return self._request(
+            "PATCH",
+            table,
+            params=_params_from_filters(filters),
+            content=json.dumps(values),
+            headers={"Prefer": "return=representation"},
         )
 
     def delete(self, table: str, *, filters: Filters) -> list[Row]:
@@ -233,6 +244,14 @@ class _InMemory:
                 match.update(r)
                 result.append(match)
         return result
+
+    def update(self, table: str, values: Row, *, filters: Filters) -> list[Row]:
+        updated: list[Row] = []
+        for r in self._t(table):
+            if _passes_filter(r, filters):
+                r.update(values)
+                updated.append(r)
+        return [dict(r) for r in updated]
 
     def delete(self, table: str, *, filters: Filters) -> list[Row]:
         rows = self._t(table)

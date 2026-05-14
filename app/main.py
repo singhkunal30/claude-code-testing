@@ -7,9 +7,11 @@ from app.routers import (
     comments,
     digests,
     entries,
+    export,
     highlights,
     prompts,
     reactions,
+    share,
     stats,
 )
 from app.ui import router as ui_router
@@ -25,6 +27,8 @@ app.include_router(highlights.router)
 app.include_router(prompts.router)
 app.include_router(ask.router)
 app.include_router(stats.router)
+app.include_router(share.router)
+app.include_router(export.router)
 app.include_router(ui_router.router)
 
 
